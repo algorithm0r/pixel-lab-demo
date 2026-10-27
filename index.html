@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PixelLab Walk Demo</title>
+<style>
+    body { margin: 0; padding: 16px; background: #1d2021; color: #d5c4a1; font: 13px monospace;
+           display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    canvas { image-rendering: pixelated; display: block; max-width: 100%; }
+    .note { opacity: 0.75; }
+</style>
+</head>
+<body>
+<div>Arrow keys / WASD move Marriott, diagonals included. Hands off for 3 s and he wanders. Ivan always wanders.</div>
+<canvas id="world"></canvas>
+<div class="note">All 8 directions at game scale (2×). Top: Marriott. Bottom: Ivan.</div>
+<canvas id="turntable"></canvas>
+<script src="pixellab-tiles.js"></script>
+<script>
+// Stage 9 art-pipeline demo: PixelLab tiles + 8-direction walks, standalone (not part of the game).
+const SCALE  = 2;              // art pixels → screen pixels; 32px tiles fill the game's 64-unit grid
+const TILE   = 32;
+const CELL   = TILE * SCALE;
+const FRAME  = 72;             // character canvas size in the sheets
+const FRAMES = 6;
+const FPS    = 9;
+const SPEED  = 110;            // screen px per second
+const IDLE_HANDOFF_MS = 3000;
+// Sheet rows, in order: one row per facing, FRAMES columns each
+const ROWS = ['south', 'south-east', 'east', 'north-east', 'north', 'north-west', 'west', 'south-west'];
+const CHARACTERS = [
+    { name: 'Marriott', image: 'sprites/marriott_walk.png', footY: 69, x: 7 * CELL,  y: 7 * CELL + 8, player: true },
+    { name: 'Ivan',     image: 'sprites/ivan_walk.png',     footY: 69, x: 10 * CELL, y: 5 * CELL },
+];
+
+// Facing row from a screen-space vector (y down): 0 = south, counting through east to north and back
+function dirIndex(dx, dy) {
+    return (Math.round(Math.atan2(dx, dy) / (Math.PI / 4)) + 8) % 8;
+}
+
+const DIR_VECTORS = ROWS.map((_, i) => {
+    const a = i * Math.PI / 4;
+    return { x: Math.sin(a), y: Math.cos(a) };
+});
+
+function loadImage(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('could not load ' + src));
+        img.src = src;
+    });
+}
+
+// ---- Terrain -------------------------------------------------------------
+
+const V     = DEMO_VERTICES;
+const ROWS_N = V.length - 1;
+const COLS_N = V[0].length - 1;
+
+// Each cell's corners pick a tile from the set for its one non-grass terrain
+function drawTerrain(ctx, sheets) {
+    for (let r = 0; r < ROWS_N; r++) {
+        for (let c = 0; c < COLS_N; c++) {
+            const key   = V[r][c] + V[r][c + 1] + V[r + 1][c] + V[r + 1][c + 1];
+            const other = [...key].find(ch => ch !== 'g') || 'p';
+            const [sx, sy] = DEMO_TILESETS[other].tiles[key];
+            ctx.drawImage(sheets[other], sx, sy, TILE, TILE, c * CELL, r * CELL, CELL, CELL);
+        }
+    }
+}
+
+// Terrain under a screen point = the corner of its cell nearest to it
+function terrainAt(x, y) {
+    const c = Math.floor(x / CELL), r = Math.floor(y / CELL);
+    if (c < 0 || r < 0 || c >= COLS_N || r >= ROWS_N) return null;
+    const vx = c + (x % CELL >= CELL / 2 ? 1 : 0);
+    const vy = r + (y % CELL >= CELL / 2 ? 1 : 0);
+    return V[vy][vx];
+}
+
+const EDGE_X = 28, EDGE_TOP = 150;                 // keep whole sprites on screen
+
+function walkable(x, y) {
+    if (y < EDGE_TOP || x < EDGE_X || x > COLS_N * CELL - EDGE_X) return false;
+    return [-10, 0, 10].every(dx => {
+        const t = terrainAt(x + dx, y);
+        return t !== null && t !== 'w';
+    });
+}
+
+// ---- Characters ------------------------------------------------------------
+
+const keys = new Set();
+let lastInput = -Infinity;
+const KEY_VECTORS = {
+    ArrowUp: [0, -1], KeyW: [0, -1], ArrowDown: [0, 1], KeyS: [0, 1],
+    ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0],
+};
+addEventListener('keydown', e => { if (KEY_VECTORS[e.code]) { keys.add(e.code); e.preventDefault(); } });
+addEventListener('keyup',   e => keys.delete(e.code));
+
+function inputVector() {
+    let x = 0, y = 0;
+    for (const k of keys) { x += KEY_VECTORS[k][0]; y += KEY_VECTORS[k][1]; }
+    const len = Math.hypot(x, y);
+    return len ? { x: x / len, y: y / len } : null;
+}
+
+function wander(ch, dt) {
+    ch.timer -= dt;
+    if (ch.timer > 0) return ch.walking ? ch.heading : null;
+    ch.walking = !ch.walking;
+    ch.timer   = ch.walking ? 1 + Math.random() * 1.5 : 0.4 + Math.random() * 1.2;
+    if (ch.walking) ch.heading = DIR_VECTORS[Math.floor(Math.random() * 8)];
+    return ch.walking ? ch.heading : null;
+}
+
+function step(ch, dt, now) {
+    let v = null;
+    if (ch.player) {
+        v = inputVector();
+        if (v) lastInput = now;
+    }
+    if (!v && !(ch.player && now - lastInput < IDLE_HANDOFF_MS)) v = wander(ch, dt);
+
+    ch.moving = false;
+    if (!v) return;
+    ch.dir = dirIndex(v.x, v.y);
+    const nx = ch.x + v.x * SPEED * dt, ny = ch.y + v.y * SPEED * dt;
+    // Slide along obstacles one axis at a time; wanderers give up and turn instead
+    if (walkable(nx, ny))            { ch.x = nx; ch.y = ny; ch.moving = true; }
+    else if (walkable(nx, ch.y) && ch.player) { ch.x = nx; ch.moving = true; }
+    else if (walkable(ch.x, ny) && ch.player) { ch.y = ny; ch.moving = true; }
+    else if (!ch.player || now - lastInput >= IDLE_HANDOFF_MS) ch.timer = 0;
+}
+
+function drawCharacter(ctx, ch, now) {
+    const frame = ch.moving ? Math.floor(now / 1000 * FPS) % FRAMES : 0;
+    ctx.drawImage(ch.img, frame * FRAME, ch.dir * FRAME, FRAME, FRAME,
+        Math.round(ch.x - FRAME / 2 * SCALE), Math.round(ch.y - ch.footY * SCALE), FRAME * SCALE, FRAME * SCALE);
+    ctx.fillStyle = 'white';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(ch.name, Math.round(ch.x), Math.round(ch.y - ch.footY * SCALE + 2 * SCALE));
+}
+
+// ---- Turntable: every facing walking in place ----------------------------------
+
+const CROP_X = 16, CROP_W = 40, TT_COL = CROP_W * SCALE + 16, TT_ROW = FRAME * SCALE;
+
+function drawTurntable(ctx, grass, now) {
+    const frame = Math.floor(now / 1000 * FPS) % FRAMES;
+    for (let y = 0; y < ctx.canvas.height; y += CELL)
+        for (let x = 0; x < ctx.canvas.width; x += CELL)
+            ctx.drawImage(grass.img, grass.sx, grass.sy, TILE, TILE, x, y, CELL, CELL);
+    CHARACTERS.forEach((ch, r) => {
+        ROWS.forEach((_, d) => {
+            ctx.drawImage(ch.img, frame * FRAME + CROP_X, d * FRAME, CROP_W, FRAME,
+                d * TT_COL + 8, r * TT_ROW, CROP_W * SCALE, FRAME * SCALE);
+        });
+    });
+}
+
+// ---- Boot ----------------------------------------------------------------------
+
+async function main() {
+    const sheets = {};
+    for (const k of Object.keys(DEMO_TILESETS)) sheets[k] = await loadImage(DEMO_TILESETS[k].image);
+    for (const ch of CHARACTERS) {
+        ch.img = await loadImage(ch.image);
+        Object.assign(ch, { dir: 0, moving: false, walking: false, timer: Math.random(), heading: DIR_VECTORS[0] });
+    }
+
+    const world = document.getElementById('world');
+    world.width = COLS_N * CELL; world.height = ROWS_N * CELL;
+    const wctx = world.getContext('2d');
+    const ground = document.createElement('canvas');
+    ground.width = world.width; ground.height = world.height;
+    const gctx = ground.getContext('2d');
+    gctx.imageSmoothingEnabled = false;
+    drawTerrain(gctx, sheets);
+
+    const tt = document.getElementById('turntable');
+    tt.width = ROWS.length * TT_COL; tt.height = CHARACTERS.length * TT_ROW;
+    const tctx = tt.getContext('2d');
+    const [gx, gy] = DEMO_TILESETS.p.tiles.gggg;
+    const grass = { img: sheets.p, sx: gx, sy: gy };
+
+    let prev = performance.now();
+    function frame(now) {
+        const dt = Math.min((now - prev) / 1000, 0.05);
+        prev = now;
+        for (const ch of CHARACTERS) step(ch, dt, now);
+
+        wctx.imageSmoothingEnabled = false;
+        wctx.drawImage(ground, 0, 0);
+        [...CHARACTERS].sort((a, b) => a.y - b.y).forEach(ch => drawCharacter(wctx, ch, now));
+
+        tctx.imageSmoothingEnabled = false;
+        drawTurntable(tctx, grass, now);
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+}
+
+main().catch(err => { document.body.insertAdjacentText('beforeend', String(err)); });
+</script>
+</body>
+</html>
