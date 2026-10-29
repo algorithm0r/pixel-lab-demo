@@ -2,19 +2,33 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>PixelLab Walk Demo</title>
+<title>PixelLab Art Demo</title>
 <style>
     body { margin: 0; padding: 16px; background: #1d2021; color: #d5c4a1; font: 13px monospace;
            display: flex; flex-direction: column; align-items: center; gap: 10px; }
     canvas { image-rendering: pixelated; display: block; max-width: 100%; }
-    .note { opacity: 0.75; }
+    h2 { font-size: 14px; margin: 18px 0 0; color: #ebdbb2; }
+    .note { opacity: 0.75; max-width: 900px; text-align: center; }
+    #cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px;
+            width: 100%; max-width: 1040px; }
+    .card { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+    .card canvas { border: 1px solid #3c3836; }
+    .card .name { color: #ebdbb2; }
+    .card .role { opacity: 0.65; font-size: 11px; }
 </style>
 </head>
 <body>
 <div>Arrow keys / WASD move Marriott, diagonals included. Hands off for 3 s and he wanders. Ivan always wanders.</div>
 <canvas id="world"></canvas>
-<div class="note">All 8 directions at game scale (2×). Rows: Marriott, Ivan, Jordan.</div>
-<canvas id="turntable"></canvas>
+<h2>The cast</h2>
+<div class="note">Everyone at game scale (2×), walking in place and turning through all 8 directions.</div>
+<div id="cast"></div>
+<h2>A street in Ashwater</h2>
+<div class="note">Tiles and props together: The Ballast and the Library (cutaway), the sidewalk, the street, the Mill Line crossing, steps down to the dock.</div>
+<canvas id="scene"></canvas>
+<h2>The Customs House</h2>
+<div class="note">The landmark across Cascade Avenue. The clock stopped years ago.</div>
+<canvas id="landmark"></canvas>
 <script src="pixellab-tiles.js"></script>
 <script>
 // Stage 9 art-pipeline demo: PixelLab tiles + 8-direction walks, standalone (not part of the game).
@@ -205,21 +219,196 @@ function drawCharacter(ctx, ch, now) {
     ctx.fillText(ch.name, Math.round(ch.x), Math.round(ch.y - ch.footY * SCALE + 2 * SCALE));
 }
 
-// ---- Turntable: every facing walking in place ----------------------------------
+// ---- The cast: everyone walking in place, turning through the 8 facings ----------
 
-const CROP_X = 16, CROP_W = 40, TT_COL = CROP_W * SCALE + 16, TT_ROW = FRAME * SCALE;
+const CAST = [
+    ['marriott',  'Dr. Chris Marriott', 'CS faculty'],
+    ['jordan',    'Jordan Burman',      'undergrad'],
+    ['alex_chen', 'Alex Chen',          'default player'],
+    ['jobran',    'Dr. Jobran Chebib',  'Biology faculty'],
+    ['nair',      'Dr. Priya Nair',     'Statistics faculty'],
+    ['okafor',    'Alex Okafor',        'Writing faculty'],
+    ['webb',      'Dr. Yolanda Webb',   'Physics faculty'],
+    ['sam',       'Sam Park',           'CS grad'],
+    ['maria',     'Maria Vásquez',      'Biology grad'],
+    ['travis',    'Travis Whitfield',   'Statistics grad'],
+    ['casey',     'Casey Drummond',     'Writing grad'],
+    ['dmitri',    'Dmitri Volkov',      'Physics grad'],
+    ['dani',      'Dani Reyes',         'café owner'],
+    ['ruth',      'Ruth George',        'bookstore owner'],
+    ['finn',      'Finn Larsen',        'The Ballast (pub)'],
+    ['owen',      'Owen Marsh',         'sandwich shop'],
+    ['ivan',      'Dr. Ivan Chebib',    'future hire, medicine'],
+].map(([file, name, role]) => ({ image: `sprites/${file}_walk.png`, name, role }));
+const SHEETS = Object.fromEntries(CAST.map(c => [c.name, c]));   // scene actors look up by name
 
-function drawTurntable(ctx, grass, now) {
-    const frame = Math.floor(now / 1000 * FPS) % FRAMES;
-    for (let y = 0; y < ctx.canvas.height; y += CELL)
-        for (let x = 0; x < ctx.canvas.width; x += CELL)
-            ctx.drawImage(grass.img, grass.sx, grass.sy, TILE, TILE, x, y, CELL, CELL);
-    CHARACTERS.forEach((ch, r) => {
-        ROWS.forEach((_, d) => {
-            ctx.drawImage(ch.img, frame * FRAME + CROP_X, d * FRAME, CROP_W, FRAME,
-                d * TT_COL + 8, r * TT_ROW, CROP_W * SCALE, FRAME * SCALE);
-        });
+const CARD_CROP_X = 12, CARD_CROP_W = 48, CARD_H = FRAME * SCALE + 8;
+const TURN_MS = 750;                                              // time on each facing
+
+function sheetFrame(now) {
+    return Math.floor(now / 1000 * FPS) % FRAMES;
+}
+
+function buildCast() {
+    const host = document.getElementById('cast');
+    return CAST.map((c, i) => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        const canvas = document.createElement('canvas');
+        canvas.width = CARD_CROP_W * SCALE; canvas.height = CARD_H;
+        card.append(canvas);
+        card.insertAdjacentHTML('beforeend', `<div class="name">${c.name}</div><div class="role">${c.role}</div>`);
+        host.append(card);
+        return { ...c, ctx: canvas.getContext('2d'), offset: i * 3 };   // staggered so they don't turn in lockstep
     });
+}
+
+function drawCard(card, grass, now) {
+    const ctx = card.ctx;
+    ctx.imageSmoothingEnabled = false;
+    for (let x = 0; x < ctx.canvas.width; x += CELL)
+        for (let y = 0; y < ctx.canvas.height; y += CELL)
+            ctx.drawImage(grass.img, grass.sx, grass.sy, TILE, TILE, x, y, CELL, CELL);
+    const dir = (Math.floor(now / TURN_MS) + card.offset) % 8;
+    ctx.drawImage(SHEETS[card.name].img, sheetFrame(now) * FRAME + CARD_CROP_X, dir * FRAME, CARD_CROP_W, FRAME,
+        0, 4, CARD_CROP_W * SCALE, FRAME * SCALE);
+}
+
+// ---- A street in Ashwater: tiles, props and a few of the cast ---------------------
+
+const GROUND_IMAGE = 'sprites/tiles_ground.png';
+const GROUND = { stair: [0, 0], pavers: [32, 0], rail: [64, 0] };   // plain seamless tiles, no transitions
+const SC_COLS = 16, SC_ROWS = 13;
+
+// Outdoor corners: buildings (rows 0–4, drawn over), sidewalk and street, grass, then the shore
+const SCENE_VERTICES = [
+    ...Array(5).fill('g'.repeat(SC_COLS + 1)),
+    ...Array(4).fill('p'.repeat(SC_COLS + 1)),
+    ...Array(2).fill('g'.repeat(SC_COLS + 1)),
+    ...Array(3).fill('w'.repeat(SC_COLS + 1)),
+];
+
+// Cutaway building corner grid: brick ring, fir floor, the door open in the south wall
+function buildingGrid(cols, rows, doorCols) {
+    return Array.from({ length: rows + 1 }, (_, r) => Array.from({ length: cols + 1 }, (_, c) => {
+        const edge = r === 0 || c === 0 || r === rows || c === cols;
+        return edge && !(r === rows && doorCols.includes(c)) ? 'b' : 'f';
+    }).join(''));
+}
+
+const SCENE_BUILDINGS = [
+    { col: 0, row: 0, grid: buildingGrid(8, 5, [3, 4]) },   // The Ballast
+    { col: 8, row: 0, grid: buildingGrid(8, 5, [3, 4]) },   // the Library
+];
+
+// Plain ground cells laid over the corner terrain: [kind, col, row]
+const SCENE_GROUND = [
+    ...Array.from({ length: SC_COLS }, (_, c) => ['pavers', c, 5]),
+    ...Array.from({ length: SC_COLS }, (_, c) => [c === 6 || c === 7 ? 'pavers' : 'rail', c, 8]),
+    ['stair', 6, 9], ['stair', 7, 9], ['stair', 6, 10], ['stair', 7, 10],
+];
+
+// Props: base point in cells (x, y); footY = art row the base sits on when the image is padded below
+const SCENE_PROPS = [
+    // The Ballast
+    ['bar_counter', 2.4, 1.95], ['jukebox', 6.4, 1.8], ['neon_sign', 4.7, 1.2], ['ships_bell', 5.5, 1.3],
+    ['pub_booth', 1.6, 3.7], ['pub_booth', 6.0, 3.7],
+    // the Library
+    ['card_catalogue', 9.2, 1.8], ['shelf', 10.9, 1.7], ['shelf', 12.5, 1.7], ['library_terminal', 14.7, 1.9],
+    ['reading_table', 10.6, 3.5], ['crane_gantry', 13.6, 3.9],
+    // sidewalk
+    ['lamp_post', 1.5, 5.9], ['menu_board', 3.0, 5.9], ['bulletin_board', 7.9, 5.85], ['lamp_post', 10.0, 5.9],
+    ['cafe_table', 12.2, 5.9], ['mailbox', 14.9, 5.9],
+    // the Mill Line crossing
+    ['crossbuck', 5.6, 8.5], ['crossbuck', 8.4, 8.5],
+    // grass
+    ['tree_fir_tall', 1.3, 10.7], ['tree_maple', 3.6, 10.9], ['tree_fir_young', 10.3, 10.6], ['tree_street_autumn', 14.4, 10.9],
+    ...[12, 13].map(c => ['picket_fence', c + 0.5, 9.45]),
+    // the dock
+    ...[6, 7, 8, 9].map(c => ['dock_float', c + 0.5, 12.0]),
+    ['piling', 10.2, 11.95], ['boat', 12.4, 12.6], ['tug', 3.0, 12.75],
+].map(([name, x, y]) => ({ name, x: x * CELL, y: y * CELL }));
+const PROP_IMAGES = { shelf: { src: 'sprites/props-test/shelf_mapobject.png', footY: 59 } };
+const propSrc = name => (PROP_IMAGES[name] || {}).src || `sprites/props/${name}.png`;
+
+// Cast in the scene: standing ones glance about; walkers go back and forth between two points
+const SCENE_ACTORS = [
+    { name: 'Finn Larsen',    at: [2.4, 1.75], dir: 0 },
+    { name: 'Alex Okafor',    at: [9.9, 3.3],  dir: 2 },
+    { name: 'Ruth George',    at: [8.5, 5.95], dir: 4 },
+    { name: 'Casey Drummond', at: [11.6, 5.95], dir: 2 },
+    { name: 'Maria Vásquez',  at: [12.8, 5.95], dir: 6 },
+    { name: 'Owen Marsh',     at: [8.6, 11.9], dir: 0 },
+    { name: 'Jordan Burman',  from: [0.6, 6.8], to: [15.4, 6.8] },
+    { name: 'Sam Park',       from: [15.2, 7.6], to: [0.8, 7.6] },
+    { name: 'Dr. Jobran Chebib', from: [0.8, 5.95], to: [6.3, 5.95] },
+    { name: 'Alex Chen',      from: [6.9, 8.6], to: [6.9, 11.8] },
+].map(a => ({ ...a, t: Math.random() }));
+
+const WALK_SPEED_CELLS = 1.6;   // cells per second, a stroll
+
+// Where an actor stands now, which way it faces, and whether it's walking
+function actorPose(a, now) {
+    if (a.at) {
+        const glance = Math.floor(now / 2600 + a.t * 7) % 4;      // look left, back, right, back
+        return { x: a.at[0] * CELL, y: a.at[1] * CELL, dir: (a.dir + [0, 1, 0, 7][glance]) % 8, moving: false };
+    }
+    const dx = a.to[0] - a.from[0], dy = a.to[1] - a.from[1];
+    const len = Math.hypot(dx, dy), period = 2 * len / WALK_SPEED_CELLS;
+    const phase = ((now / 1000 + a.t * period) % period) / period;  // 0..1, there and back
+    const k = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+    const sign = phase < 0.5 ? 1 : -1;
+    return { x: (a.from[0] + dx * k) * CELL, y: (a.from[1] + dy * k) * CELL,
+             dir: dirIndex(dx * sign, dy * sign), moving: true };
+}
+
+function drawScene(ctx, ground, props, now) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(ground, 0, 0);
+    const drawables = [
+        ...SCENE_PROPS.map(p => ({ y: p.y, draw: () => {
+            const img = props[p.name], footY = (PROP_IMAGES[p.name] || {}).footY || img.height;
+            ctx.drawImage(img, Math.round(p.x - img.width * SCALE / 2), Math.round(p.y - footY * SCALE),
+                img.width * SCALE, img.height * SCALE);
+        } })),
+        ...SCENE_ACTORS.map(a => {
+            const pose = actorPose(a, now);
+            return { y: pose.y, draw: () => {
+                const frame = pose.moving ? sheetFrame(now) : 0;
+                ctx.drawImage(SHEETS[a.name].img, frame * FRAME, pose.dir * FRAME, FRAME, FRAME,
+                    Math.round(pose.x - FRAME / 2 * SCALE), Math.round(pose.y - 69 * SCALE), FRAME * SCALE, FRAME * SCALE);
+            } };
+        }),
+    ];
+    drawables.sort((a, b) => a.y - b.y).forEach(d => d.draw());
+}
+
+function paintSceneGround(sheets, groundImg) {
+    const canvas = document.createElement('canvas');
+    canvas.width = SC_COLS * CELL; canvas.height = SC_ROWS * CELL;
+    const g = canvas.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    drawCorners(g, sheets, SCENE_VERTICES, 0, 0);
+    for (const b of SCENE_BUILDINGS) drawCorners(g, sheets, b.grid, b.col, b.row);
+    for (const [kind, c, r] of SCENE_GROUND) {
+        const [sx, sy] = GROUND[kind];
+        g.drawImage(groundImg, sx, sy, TILE, TILE, c * CELL, r * CELL, CELL, CELL);
+    }
+    return canvas;
+}
+
+// ---- The Customs House on its plaza --------------------------------------------
+
+function drawLandmark(canvas, groundImg, house) {
+    canvas.width = Math.ceil((house.width * SCALE + 2 * CELL) / CELL) * CELL;
+    canvas.height = house.height * SCALE + 2 * CELL;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const [sx, sy] = GROUND.pavers;
+    for (let x = 0; x < canvas.width; x += CELL)
+        for (let y = 0; y < canvas.height; y += CELL)
+            ctx.drawImage(groundImg, sx, sy, TILE, TILE, x, y, CELL, CELL);
+    ctx.drawImage(house, (canvas.width - house.width * SCALE) / 2, CELL, house.width * SCALE, house.height * SCALE);
 }
 
 // ---- Boot ----------------------------------------------------------------------
@@ -242,11 +431,20 @@ async function main() {
     gctx.imageSmoothingEnabled = false;
     northWallBottom = drawTerrain(gctx, sheets, props);
 
-    const tt = document.getElementById('turntable');
-    tt.width = ROWS.length * TT_COL; tt.height = CHARACTERS.length * TT_ROW;
-    const tctx = tt.getContext('2d');
     const [gx, gy] = DEMO_TILESETS.p.tiles.gggg;
     const grass = { img: sheets.p, sx: gx, sy: gy };
+
+    await Promise.all(CAST.map(async c => { c.img = await loadImage(c.image); }));
+    const cards = buildCast();
+
+    const groundImg = await loadImage(GROUND_IMAGE);
+    const propImgs = {};
+    await Promise.all([...new Set(SCENE_PROPS.map(p => p.name))].map(async n => { propImgs[n] = await loadImage(propSrc(n)); }));
+    const scene = document.getElementById('scene');
+    scene.width = SC_COLS * CELL; scene.height = SC_ROWS * CELL;
+    const sctx = scene.getContext('2d');
+    const sceneGround = paintSceneGround(sheets, groundImg);
+    drawLandmark(document.getElementById('landmark'), groundImg, await loadImage('sprites/props/customs_house.png'));
 
     let prev = performance.now();
     function frame(now) {
@@ -259,8 +457,8 @@ async function main() {
         [...CHARACTERS, ...posts].sort((a, b) => a.y - b.y)
             .forEach(d => d.post ? drawPost(wctx, props, d) : drawCharacter(wctx, d, now));
 
-        tctx.imageSmoothingEnabled = false;
-        drawTurntable(tctx, grass, now);
+        for (const card of cards) drawCard(card, grass, now);
+        drawScene(sctx, sceneGround, propImgs, now);
         requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
