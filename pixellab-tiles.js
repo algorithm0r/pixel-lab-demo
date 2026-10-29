@@ -1,4 +1,5 @@
-// Generated from PixelLab tileset metadata. Wang corner key = NW NE SW SE, g = grass.
+// Generated from PixelLab tileset metadata. Wang corner key = NW NE SW SE.
+// Letters: g grass, p path, w water, f fir floor, b brick wall.
 const DEMO_TILESETS = {
   "p": {
     "image": "sprites/tiles_grass_path.png",
@@ -137,20 +138,104 @@ const DEMO_TILESETS = {
         96
       ]
     }
+  },
+  "b": {
+    "image": "sprites/tiles_fir_brick.png",
+    "tiles": {
+      "bbfb": [
+        0,
+        0
+      ],
+      "bfbf": [
+        32,
+        0
+      ],
+      "fbff": [
+        64,
+        0
+      ],
+      "bbff": [
+        96,
+        0
+      ],
+      "fbbf": [
+        0,
+        32
+      ],
+      "bfff": [
+        32,
+        32
+      ],
+      "ffff": [
+        64,
+        32
+      ],
+      "fffb": [
+        96,
+        32
+      ],
+      "bfbb": [
+        0,
+        64
+      ],
+      "ffbb": [
+        32,
+        64
+      ],
+      "ffbf": [
+        64,
+        64
+      ],
+      "fbfb": [
+        96,
+        64
+      ],
+      "bbbb": [
+        0,
+        96
+      ],
+      "bbbf": [
+        32,
+        96
+      ],
+      "bffb": [
+        64,
+        96
+      ],
+      "fbbb": [
+        96,
+        96
+      ]
+    }
   }
 };
 
-// Terrain at each tile corner (vertex grid): g grass, p path, w water
+// Outdoor terrain at each tile corner
 const DEMO_VERTICES = [
-    'ggggggpppgggggggg',
-    'ggggggpppgggwwwgg',
-    'ggggggpppggwwwwwg',
-    'ggggggpppggwwwwwg',
-    'ggggggpppgggwwwgg',
-    'ggggggpppgggggggg',
+    'ggggggggpppgggggg',
+    'ggggggggpppggwwwg',
+    'ggggggggpppggwwww',
+    'ggggggggpppggwwww',
+    'ggggggggpppggwwwg',
+    'ggggggggpppgggggg',
     'ppppppppppppppppp',
     'ppppppppppppppppp',
     'ppppppppppppppppp',
     'ggggggggggggggggg',
     'ggggggggggggggggg',
 ];
+
+// A cutaway brick building with its own corner grid, drawn over the outdoor cells it covers
+const DEMO_BUILDING = {
+    "col": 0,
+    "row": 0,
+    "vertices": [
+        "bbbbbbbb",
+        "bffffffb",
+        "bffffffb",
+        "bffffffb",
+        "bffffffb",
+        "bffffffb",
+        "bbbffbbb"
+    ]
+};

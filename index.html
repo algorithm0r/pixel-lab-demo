@@ -13,7 +13,7 @@
 <body>
 <div>Arrow keys / WASD move Marriott, diagonals included. Hands off for 3 s and he wanders. Ivan always wanders.</div>
 <canvas id="world"></canvas>
-<div class="note">All 8 directions at game scale (2×). Top: Marriott. Bottom: Ivan.</div>
+<div class="note">All 8 directions at game scale (2×). Rows: Marriott, Ivan, Jordan.</div>
 <canvas id="turntable"></canvas>
 <script src="pixellab-tiles.js"></script>
 <script>
@@ -30,8 +30,17 @@ const IDLE_HANDOFF_MS = 3000;
 const ROWS = ['south', 'south-east', 'east', 'north-east', 'north', 'north-west', 'west', 'south-west'];
 const CHARACTERS = [
     { name: 'Marriott', image: 'sprites/marriott_walk.png', footY: 69, x: 7 * CELL,  y: 7 * CELL + 8, player: true },
-    { name: 'Ivan',     image: 'sprites/ivan_walk.png',     footY: 69, x: 10 * CELL, y: 5 * CELL },
-];
+    { name: 'Ivan',     image: 'sprites/ivan_walk.png',     footY: 69, x: 3.5 * CELL, y: 3.5 * CELL },
+    { name: 'Jordan',   image: 'sprites/jordan_walk.png',   footY: 69, x: 9 * CELL,  y: 8 * CELL },];
+// Hand-drawn interior pieces (art px) in sprites/interior_props.png
+const PROPS_IMAGE = 'sprites/interior_props.png';
+const WALL_FACE   = { sx: 0,  sy: 0, w: 32, h: 32 };
+const WINDOW      = { sx: 32, sy: 0, w: 32, h: 32 };
+const POST        = { sx: 64, sy: 0, w: 16, h: 64, footY: 61 };
+const WALL_FACE_TOP = 24;      // art row where the tileset's north wall face ends and floor begins
+const WINDOW_COLS   = [1.5, 4.5];                    // building-local cells, either side of the door
+const POSTS         = [{ col: 2, row: 3.6 }, { col: 5, row: 3.6 }];
+const POST_HALF_W = 14, POST_DEPTH = 10;
 
 // Facing row from a screen-space vector (y down): 0 = south, counting through east to north and back
 function dirIndex(dx, dy) {
@@ -58,35 +67,86 @@ const V     = DEMO_VERTICES;
 const ROWS_N = V.length - 1;
 const COLS_N = V[0].length - 1;
 
-// Each cell's corners pick a tile from the set for its one non-grass terrain
-function drawTerrain(ctx, sheets) {
-    for (let r = 0; r < ROWS_N; r++) {
-        for (let c = 0; c < COLS_N; c++) {
-            const key   = V[r][c] + V[r][c + 1] + V[r + 1][c] + V[r + 1][c + 1];
-            const other = [...key].find(ch => ch !== 'g') || 'p';
-            const [sx, sy] = DEMO_TILESETS[other].tiles[key];
-            ctx.drawImage(sheets[other], sx, sy, TILE, TILE, c * CELL, r * CELL, CELL, CELL);
+const B      = DEMO_BUILDING;
+const BV     = B.vertices;
+const B_COLS = BV[0].length - 1;
+const B_ROWS = BV.length - 1;
+const BLOCKED = new Set(['w', 'b']);
+
+// The set a corner key belongs to: interior letters, else its one non-grass terrain
+function tilesetFor(key) {
+    if (/[fb]/.test(key)) return 'b';
+    return [...key].find(ch => ch !== 'g') || 'p';
+}
+
+function drawCorners(ctx, sheets, grid, col0, row0) {
+    for (let r = 0; r < grid.length - 1; r++) {
+        for (let c = 0; c < grid[0].length - 1; c++) {
+            const key = grid[r][c] + grid[r][c + 1] + grid[r + 1][c] + grid[r + 1][c + 1];
+            const set = tilesetFor(key);
+            const [sx, sy] = DEMO_TILESETS[set].tiles[key];
+            ctx.drawImage(sheets[set], sx, sy, TILE, TILE, (col0 + c) * CELL, (row0 + r) * CELL, CELL, CELL);
         }
     }
 }
 
+// Raise the north wall: tile the brick face down from where the tileset's face ends, then set windows in it
+function drawNorthWall(ctx, props) {
+    const left  = (B.col + 0.5) * CELL, right = (B.col + B_COLS - 0.5) * CELL;
+    const top   = B.row * CELL + WALL_FACE_TOP * SCALE;
+    const faceW = WALL_FACE.w * SCALE, faceH = WALL_FACE.h * SCALE;
+    for (let x = left; x < right; x += faceW) {
+        const w = Math.min(faceW, right - x);
+        ctx.drawImage(props, WALL_FACE.sx, WALL_FACE.sy, w / SCALE, WALL_FACE.h, x, top, w, faceH);
+    }
+    for (const col of WINDOW_COLS) {
+        ctx.drawImage(props, WINDOW.sx, WINDOW.sy, WINDOW.w, WINDOW.h,
+            (B.col + col) * CELL - WINDOW.w * SCALE / 2, top, WINDOW.w * SCALE, WINDOW.h * SCALE);
+    }
+    return top + faceH;                            // feet can't go above the bottom of the wall
+}
+
+function drawTerrain(ctx, sheets, props) {
+    drawCorners(ctx, sheets, V, 0, 0);
+    drawCorners(ctx, sheets, BV, B.col, B.row);
+    return drawNorthWall(ctx, props);
+}
+
+function inBuilding(x, y) {
+    return x >= B.col * CELL && x < (B.col + B_COLS) * CELL && y >= B.row * CELL && y < (B.row + B_ROWS) * CELL;
+}
+
 // Terrain under a screen point = the corner of its cell nearest to it
-function terrainAt(x, y) {
+function cornerAt(grid, x, y) {
     const c = Math.floor(x / CELL), r = Math.floor(y / CELL);
-    if (c < 0 || r < 0 || c >= COLS_N || r >= ROWS_N) return null;
-    const vx = c + (x % CELL >= CELL / 2 ? 1 : 0);
-    const vy = r + (y % CELL >= CELL / 2 ? 1 : 0);
-    return V[vy][vx];
+    if (c < 0 || r < 0 || c >= grid[0].length - 1 || r >= grid.length - 1) return null;
+    return grid[r + (y % CELL >= CELL / 2 ? 1 : 0)][c + (x % CELL >= CELL / 2 ? 1 : 0)];
+}
+
+function terrainAt(x, y) {
+    return inBuilding(x, y) ? cornerAt(BV, x - B.col * CELL, y - B.row * CELL) : cornerAt(V, x, y);
 }
 
 const EDGE_X = 28, EDGE_TOP = 150;                 // keep whole sprites on screen
+let northWallBottom = 0;
 
 function walkable(x, y) {
     if (y < EDGE_TOP || x < EDGE_X || x > COLS_N * CELL - EDGE_X) return false;
+    if (inBuilding(x, y) && y < northWallBottom + 6) return false;
+    if (posts.some(p => Math.abs(x - p.x) < POST_HALF_W && y > p.y - POST_DEPTH && y < p.y + 4)) return false;
     return [-10, 0, 10].every(dx => {
         const t = terrainAt(x + dx, y);
-        return t !== null && t !== 'w';
+        return t !== null && !BLOCKED.has(t);
     });
+}
+
+// ---- Posts: drawn depth-sorted with the characters ---------------------------------
+
+const posts = POSTS.map(p => ({ x: (B.col + p.col) * CELL, y: (B.row + p.row) * CELL, post: true }));
+
+function drawPost(ctx, props, p) {
+    ctx.drawImage(props, POST.sx, POST.sy, POST.w, POST.h,
+        Math.round(p.x - POST.w * SCALE / 2), Math.round(p.y - POST.footY * SCALE), POST.w * SCALE, POST.h * SCALE);
 }
 
 // ---- Characters ------------------------------------------------------------
@@ -167,6 +227,7 @@ function drawTurntable(ctx, grass, now) {
 async function main() {
     const sheets = {};
     for (const k of Object.keys(DEMO_TILESETS)) sheets[k] = await loadImage(DEMO_TILESETS[k].image);
+    const props = await loadImage(PROPS_IMAGE);
     for (const ch of CHARACTERS) {
         ch.img = await loadImage(ch.image);
         Object.assign(ch, { dir: 0, moving: false, walking: false, timer: Math.random(), heading: DIR_VECTORS[0] });
@@ -179,7 +240,7 @@ async function main() {
     ground.width = world.width; ground.height = world.height;
     const gctx = ground.getContext('2d');
     gctx.imageSmoothingEnabled = false;
-    drawTerrain(gctx, sheets);
+    northWallBottom = drawTerrain(gctx, sheets, props);
 
     const tt = document.getElementById('turntable');
     tt.width = ROWS.length * TT_COL; tt.height = CHARACTERS.length * TT_ROW;
@@ -195,7 +256,8 @@ async function main() {
 
         wctx.imageSmoothingEnabled = false;
         wctx.drawImage(ground, 0, 0);
-        [...CHARACTERS].sort((a, b) => a.y - b.y).forEach(ch => drawCharacter(wctx, ch, now));
+        [...CHARACTERS, ...posts].sort((a, b) => a.y - b.y)
+            .forEach(d => d.post ? drawPost(wctx, props, d) : drawCharacter(wctx, d, now));
 
         tctx.imageSmoothingEnabled = false;
         drawTurntable(tctx, grass, now);
